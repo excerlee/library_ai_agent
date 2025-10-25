@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  app:
+    # Build the image using the Dockerfile in the current directory
+    build:
+      context: .
+      dockerfile: Dockerfile
+    
+    # Map port 8000 on the host to port 8000 in the container
+    ports:
+      - "8000:8000"
+      
+    # Mount the local directory to the /app directory in the container
+    # This allows for live code changes (if using uvicorn --reload) and access to the sqlite file
+    volumes:
+      - .:/app
+      
+    # The command to run the application
+    # This executes the run.sh script which starts uvicorn
+    command: ["./run.sh"]
+    
+    # Playwright requires a non-root user to run the browser, 
+    # but the official image handles this. We just need to ensure 
+    # the container can access the shared memory for the browser.
+    shm_size: '2gb'
+    
+    # Restart the container if it stops
+    restart: always
