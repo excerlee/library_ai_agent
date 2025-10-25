@@ -1,6 +1,6 @@
-# Library Hold Tracker Backend
+# Library AI Agent
 
-This project is a Python backend designed to automate the process of placing books on hold at local libraries and tracking the status of those holds.
+AI agents to interact with Libraries - A Python backend designed to automate the process of placing books on hold at local libraries and tracking the status of those holds.
 
 ## Features
 
@@ -18,7 +18,7 @@ This project is a Python backend designed to automate the process of placing boo
 *   **Backend Framework:** FastAPI (for high performance and easy API definition)
 *   **Database:** SQLite (for simplicity and development, easily upgradable to PostgreSQL/MySQL)
 *   **ORM:** SQLAlchemy (for database interaction)
-*   **Web Scraping:** `requests` and `BeautifulSoup` (for static content) or `Playwright` (for dynamic content/login)
+*   **Web Scraping:** Playwright (for dynamic content/login and browser automation)
 
 ## Next Steps
 
