@@ -4,6 +4,7 @@ sqlalchemy
 pydantic
 requests
 playwright
+beautifulsoup4
 python-multipart # required for FastAPI form data
 # Install playwright drivers: playwright install
 

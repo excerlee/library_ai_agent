@@ -5,6 +5,7 @@ from typing import List
 from db.database import get_db, init_db
 from schemas import schemas
 from services import book_service, library_service
+from services.nyt_picture_books_service import fetch_nyt_picture_books
 
 app = FastAPI(
     title="Library Hold Tracker API",

@@ -8,12 +8,12 @@ from db.models import Hold as HoldModel # Import to get access to the model's st
 LIBRARY_URLS = {
     "Contra Costa": {
         "login": "https://ccclib.bibliocommons.com/user/login",
-        "search": "https://ccclib.bibliocommons.com/v2/search?query={query}&searchType=smart",
+        "search": "https://ccclib.bibliocommons.com/v2/search?query={query}&searchType=smart&f_FORMAT=BK|GRAPHIC_NOVEL|LPRINT|PICTURE_BOOK|BOARD_BK",
     },
     "Alameda": {
         "login": "https://alam1.aclibrary.org/patronaccount/login",
         # "search": "https://alam1.aclibrary.org/search/searchresults.aspx?ctx=1.1033.0.0.5&type=Keyword&term={query}&by=KW&sort=RELEVANCE&limit=TOM=t&query=&page=0&searchid=1",
-        "search": "https://aclibrary.bibliocommons.com/v2/search?query={query}&searchType=smart",
+        "search": "https://aclibrary.bibliocommons.com/v2/search?query={query}&searchType=smart&f_FORMAT=BK|GRAPHIC_NOVEL|LPRINT|PICTURE_BOOK|BOARD_BK",
     }
 }
 
@@ -30,60 +30,61 @@ async def _login_to_library(page: Page, library_name: str, card_number: str, pin
             # Take a screenshot of the login page for debugging
             await page.screenshot(path="login_page.png")
             
-            # Try multiple possible selectors for the username/card number field
+            # Find username field using query_selector (more reliable than wait_for_selector)
             username_selectors = [
-                '#name', '#username', '#user_name', '#barcode', '#card_number',
-                'input[name="name"]', 'input[name="username"]', 'input[name="user_name"]',
-                'input[type="text"]', 'input[placeholder*="card"]', 'input[placeholder*="barcode"]'
+                'input[name="name"]', '#name', '#username', 'input[name="username"]',
+                'input[type="text"]', '[placeholder*="card" i]', '[placeholder*="library" i]'
             ]
             
             username_field = None
             for selector in username_selectors:
                 try:
-                    await page.wait_for_selector(selector, timeout=2000)
-                    username_field = selector
-                    print(f"Found username field with selector: {selector}")
-                    break
+                    username_field = await page.query_selector(selector)
+                    if username_field:
+                        print(f"Found username field with selector: {selector}")
+                        break
                 except:
                     continue
             
             if not username_field:
                 raise Exception("Could not find username/card number field on login page")
             
-            # Try multiple possible selectors for the PIN/password field
-            password_selectors = [
-                '#user_pin', '#pin', '#password', '#user_password',
-                'input[name="user_pin"]', 'input[name="pin"]', 'input[name="password"]',
-                'input[type="password"]'
+            # Find PIN field using query_selector
+            pin_selectors = [
+                'input[name="user_pin"]', '#user_pin', '#pin', '#password',
+                'input[type="password"]', '[placeholder*="pin" i]'
             ]
             
-            password_field = None
-            for selector in password_selectors:
+            pin_field = None
+            for selector in pin_selectors:
                 try:
-                    password_element = await page.query_selector(selector)
-                    if password_element:
-                        password_field = selector
-                        print(f"Found password field with selector: {selector}")
+                    pin_field = await page.query_selector(selector)
+                    if pin_field:
+                        print(f"Found PIN field with selector: {selector}")
                         break
                 except:
                     continue
             
-            if not password_field:
+            if not pin_field:
                 raise Exception("Could not find PIN/password field on login page")
             
-            # Fill in credentials
+            # Type credentials directly into the elements (not selectors)
             print(f"Filling in card number: {card_number}")
-            await page.fill(username_field, card_number)
+            await username_field.type(card_number, delay=100)
             
-            print(f"Filling in PIN")
-            await page.fill(password_field, pin)
+            print(f"Filling in PIN: {pin[:2]}***")
+            await pin_field.type(pin, delay=100)
+            
+            # Wait a moment for any JavaScript validation
+            await page.wait_for_timeout(1000)
             
             # Click login button - try multiple selectors
             login_button_selectors = [
-                'button[type="submit"]:has-text("Log in")',
-                'button:has-text("Log in")',
                 'input[type="submit"]',
                 'button[type="submit"]',
+                'button:has-text("Sign In")',
+                'button:has-text("Log In")',
+                'button:has-text("Log in")',
                 '.login-button',
                 '#login-button'
             ]
@@ -91,7 +92,7 @@ async def _login_to_library(page: Page, library_name: str, card_number: str, pin
             login_clicked = False
             for selector in login_button_selectors:
                 try:
-                    await page.click(selector)
+                    await page.click(selector, timeout=2000)
                     print(f"Clicked login button with selector: {selector}")
                     login_clicked = True
                     break
@@ -101,8 +102,8 @@ async def _login_to_library(page: Page, library_name: str, card_number: str, pin
             if not login_clicked:
                 raise Exception("Could not find or click login button")
             
-            # Wait for page navigation after login
-            await page.wait_for_load_state('networkidle', timeout=15000)
+            # Wait for navigation after login
+            await page.wait_for_timeout(2000)
             
             # Take screenshot after login for debugging
             await page.screenshot(path="after_login.png")
@@ -145,21 +146,35 @@ async def _login_to_library(page: Page, library_name: str, card_number: str, pin
                 'text="Invalid"', 'text="incorrect"', 'text="error"'
             ]
             
+            error_found = None
             for selector in error_selectors:
                 try:
                     error_element = await page.query_selector(selector)
                     if error_element:
                         error_text = await error_element.inner_text()
-                        if 'error' in error_text.lower() or 'invalid' in error_text.lower():
-                            raise Exception(f"Login failed for {library_name}: {error_text}")
+                        if 'error' in error_text.lower() or 'invalid' in error_text.lower() or 'incorrect' in error_text.lower():
+                            error_found = error_text
+                            break
                 except:
                     continue
+            
+            # Check page text for common error messages
+            page_text = await page.inner_text('body')
+            if 'invalid' in page_text.lower() or 'incorrect' in page_text.lower():
+                if 'card number' in page_text.lower() or 'pin' in page_text.lower():
+                    error_found = "Invalid credentials - check card number and PIN"
+            
+            if error_found:
+                raise Exception(f"Login failed for {library_name}: {error_found}")
+            
+            # If still on login page, it's a failure
+            if '/user/login' in current_url:
+                raise Exception(f"Login failed - still on login page. Please verify card number '{card_number}' and {pin} are correct. The credentials may be invalid.")
             
             if login_successful:
                 print("✅ Successfully logged into Contra Costa Library")
             else:
-                # If no clear success or error indicators, assume success and proceed
-                print("⚠️  Login status unclear, assuming success and proceeding")
+                print("⚠️  Login status unclear, but URL changed - assuming success and proceeding")
                 
             # Always proceed with hold placement unless there was a clear error
                     
@@ -167,8 +182,8 @@ async def _login_to_library(page: Page, library_name: str, card_number: str, pin
             print(f"❌ Login error: {e}")
             # Take a screenshot for debugging
             await page.screenshot(path=f"login_error_{library_name.lower().replace(' ', '_')}.png")
-            # Don't raise exception, proceed with hold placement attempt
-            print("⚠️  Login encountered issues, but proceeding with hold placement attempt")
+            # Raise the exception - we cannot place holds without successful login
+            raise Exception(f"Cannot place hold: {e}")
             
     elif library_name == "Alameda":
         # Keep placeholder for Alameda
@@ -191,8 +206,8 @@ async def _search_and_find_item(page: Page, library_name: str, query: BookSearch
     if library_name == "Contra Costa":
         # Construct search URL for Contra Costa Library
         search_term = query.query.replace(" ", "%20")
-        # Try without format filter first to get all results, then prioritize physical books
-        url = f"https://ccclib.bibliocommons.com/v2/search?query={search_term}&searchType=smart"
+        # Use the configured URL which includes format filters
+        url = LIBRARY_URLS[library_name]["search"].format(query=search_term)
         
         print(f"DEBUG: Searching Contra Costa Library for: '{query.query}'")
         print(f"DEBUG: Search URL: {url}")
@@ -249,6 +264,18 @@ async def _search_and_find_item(page: Page, library_name: str, query: BookSearch
             print("DEBUG: No search results found with any selector")
             return []
         
+        # Wait for results to load
+        try:
+            await page.wait_for_selector('.cp-search-result-item-content', timeout=10000)
+        except:
+            print("DEBUG: No search results found (selector timeout)")
+            return []
+        
+        # Scroll down to load more results (BiblioCommons uses lazy loading)
+        for _ in range(3):
+            await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            await page.wait_for_timeout(1000)
+        
         # Extract search results using the working selector
         search_items = await page.query_selector_all('.cp-search-result-item-content')
         print(f"DEBUG: Found {len(search_items)} search result items")
@@ -257,7 +284,7 @@ async def _search_and_find_item(page: Page, library_name: str, query: BookSearch
         physical_books = []
         ebooks = []
         
-        for i, item in enumerate(search_items[:10]):  # Check more results to find physical books
+        for i, item in enumerate(search_items[:30]):  # Check more results to find physical books
             try:
                 print(f"DEBUG: Processing search result {i+1}")
                 
@@ -270,14 +297,19 @@ async def _search_and_find_item(page: Page, library_name: str, query: BookSearch
                 ]
                 title_element = None
                 title = "Unknown Title"
+                full_title_text = "Unknown Title"
                 
                 for selector in title_selectors:
                     title_element = await item.query_selector(selector)
                     if title_element:
                         title_text = await title_element.inner_text()
                         if title_text and title_text.strip():
-                            title = title_text.strip()
-                            print(f"DEBUG: Found title '{title}' with selector: {selector}")
+                            full_title_text = title_text.strip()
+                            title = full_title_text
+                            # If title has multiple lines, take the first one for the clean title
+                            if '\n' in title:
+                                title = title.split('\n')[0].strip()
+                            print(f"DEBUG: Found title '{title}' (Full: '{full_title_text}') with selector: {selector}")
                             break
                 
                 # If still no title, try getting any text content from the item
@@ -288,18 +320,53 @@ async def _search_and_find_item(page: Page, library_name: str, query: BookSearch
                         line = line.strip()
                         if line and len(line) > 5 and 'by ' not in line.lower():
                             title = line
+                            full_title_text = title
                             print(f"DEBUG: Found title from text content: {title}")
                             break
                 
                 print(f"DEBUG: Extracted title: {title}")
                 
-                # Check if this is an ebook or physical book
-                is_ebook = any(keyword in title.lower() for keyword in ['ebook', 'e-book', 'digital', 'downloadable', 'online'])
+                # Check if this is a non-book format (ebook, audiobook, etc.)
+                # We want to prioritize physical print books
+                non_book_keywords = [
+                    'ebook', 'e-book', 'digital', 'downloadable', 'online', 
+                    'audiobook', 'audio book', 'sound recording', 'playaway',
+                    'hoopla', 'overdrive', 'streaming', 'electronic resource',
+                    'compact disc', 'spoken word'
+                ]
                 
-                # Also check availability and format info for digital formats
+                # Check full title text for format info
+                is_non_book = any(keyword in full_title_text.lower() for keyword in non_book_keywords)
+                
+                # Also check availability and format info for digital/audio formats
                 item_text = await item.inner_text()
-                if any(keyword in item_text.lower() for keyword in ['ebook', 'e-book', 'digital', 'downloadable', 'hoopla', 'overdrive']):
-                    is_ebook = True
+                # print(f"DEBUG: Item text start: {item_text[:100].replace(chr(10), ' ')}...") 
+                
+                if not is_non_book:
+                    item_text_lower = item_text.lower()
+                    # Check for specific format indicators to avoid false positives (e.g. "Also available as eBook")
+                    if "format: ebook" in item_text_lower:
+                        is_non_book = True
+                    elif "format: downloadable" in item_text_lower:
+                        is_non_book = True
+                    elif "format: audiobook" in item_text_lower:
+                        is_non_book = True
+                    elif "format: cd" in item_text_lower:
+                        is_non_book = True
+                    elif "format: sound recording" in item_text_lower:
+                        is_non_book = True
+                    # Strong keywords that usually indicate non-book format
+                    elif "downloadable music" in item_text_lower:
+                        is_non_book = True
+                    elif "streaming video" in item_text_lower:
+                        is_non_book = True
+                    elif "electronic resource" in item_text_lower:
+                        is_non_book = True
+                
+                # Explicitly check for physical book formats to override false positives
+                # (e.g. if "Format: Book" is present, it's a book even if "eBook" is mentioned elsewhere)
+                if "format: book" in item_text_lower or "format: hardcover" in item_text_lower or "format: paperback" in item_text_lower or "format: large print" in item_text_lower:
+                    is_non_book = False
                 
                 # Extract author
                 author_selectors = [
@@ -381,9 +448,9 @@ async def _search_and_find_item(page: Page, library_name: str, query: BookSearch
                 )
                 
                 # Categorize results
-                if is_ebook:
+                if is_non_book:
                     ebooks.append(result)
-                    print(f"Found ebook: {clean_title} by {author} (ID: {library_item_id})")
+                    print(f"Found non-book format: {clean_title} by {author} (ID: {library_item_id})")
                 else:
                     physical_books.append(result)
                     print(f"Found physical book: {clean_title} by {author} (ID: {library_item_id})")
@@ -392,16 +459,13 @@ async def _search_and_find_item(page: Page, library_name: str, query: BookSearch
                 print(f"Error parsing search result item: {e}")
                 continue
         
-        # Prioritize physical books, but include ebooks if no physical books found
+        # Prioritize physical books
         if physical_books:
             results = physical_books[:5]  # Limit to first 5 physical books
             print(f"DEBUG: Returning {len(results)} physical books")
-        elif ebooks:
-            results = ebooks[:5]  # Fall back to ebooks if no physical books
-            print(f"DEBUG: No physical books found, returning {len(results)} ebooks")
         else:
-            results = []
-            print("DEBUG: No books found")
+            print(f"DEBUG: No physical books found. Found {len(ebooks)} non-books.")
+            results = [] # Do not fall back to ebooks/non-books
     
     elif library_name == "Alameda":
         # Keep simulation for Alameda for now
@@ -586,8 +650,18 @@ async def search_library_catalog(query: BookSearchQuery) -> List[BookSearchResul
     print(f"DEBUG: Received search query: '{query.query}' for library '{query.library}' with search_type '{query.search_type}'")
     async with async_playwright() as p:
         browser: Browser = await p.chromium.launch(
-            headless=True,   # Run in headless mode for Docker
-            args=['--no-sandbox', '--disable-dev-shm-usage']  # Optimize for performance
+            headless=True,
+            args=[
+                '--no-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled',  # Hide automation
+                '--disable-features=IsolateOrigins,site-per-process'
+            ]
+        )
+        # Create context with realistic viewport and user agent
+        context = await browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         )
         page: Page = await browser.new_page()
         try:
@@ -600,10 +674,26 @@ async def place_hold(request: PlaceHoldRequest) -> Hold:
     """Public function to log in and place a hold."""
     async with async_playwright() as p:
         browser: Browser = await p.chromium.launch(
-            headless=True,   # Run in headless mode for Docker
-            args=['--no-sandbox', '--disable-dev-shm-usage']  # Optimize for performance
+            headless=True,
+            args=[
+                '--no-sandbox',
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-features=IsolateOrigins,site-per-process'
+            ]
         )
-        page: Page = await browser.new_page()
+        # Create context with realistic viewport and user agent
+        context = await browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        )
+        page: Page = await context.new_page()
+        
+        # Add extra properties to avoid detection
+        await page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            window.chrome = {runtime: {}};
+        """)
         try:
             # 1. Login
             await _login_to_library(page, request.library_name, request.library_card_number, request.library_pin)
@@ -622,6 +712,7 @@ async def place_hold(request: PlaceHoldRequest) -> Hold:
                 **status_data
             }
         finally:
+            await context.close()
             await browser.close()
 
 async def check_hold_status(hold: HoldModel) -> Dict[str, Any]:
