@@ -8,6 +8,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Install Playwright browsers (required for web automation)
+RUN playwright install chromium
+
 # Copy the rest of the application code
 COPY . .
 

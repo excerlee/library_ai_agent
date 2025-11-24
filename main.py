@@ -61,18 +61,21 @@ async def place_hold_endpoint(hold_request: schemas.PlaceHoldRequest, db: Sessio
     # 2. Save the successful hold record to the database
     hold_create = schemas.HoldCreate(
         user_id=hold_request.user_id,
-        title=hold_data.title,
-        author=hold_data.author,
-        isbn=hold_data.isbn,
-        library_name=hold_data.library_name,
-        library_item_id=hold_data.library_item_id
+        title=hold_data["title"],
+        author=hold_data.get("author"),
+        isbn=hold_data.get("isbn"),
+        library_name=hold_data["library_name"],
+        library_item_id=hold_data["library_item_id"]
     )
     db_hold = book_service.create_hold(db=db, hold=hold_create)
     
     # 3. Update the database record with the status information from the library
-    book_service.update_hold_status(db, db_hold.id, hold_data.model_dump(exclude_unset=True))
+    # Extract only the status fields for the update
+    status_fields = {k: v for k, v in hold_data.items() 
+                    if k in ["status", "queue_position", "estimated_wait_days", "last_checked"]}
+    book_service.update_hold_status(db, db_hold.id, status_fields)
     
-    return book_service.update_hold_status(db, db_hold.id, hold_data.model_dump(exclude_unset=True))
+    return book_service.update_hold_status(db, db_hold.id, status_fields)
 
 @app.get("/holds/{user_id}", response_model=List[schemas.Hold])
 def get_user_holds_endpoint(user_id: int, db: Session = Depends(get_db)):
