@@ -1,5 +1,6 @@
 from typing import Dict, Any, List
 from datetime import datetime
+import os
 from playwright.async_api import async_playwright, Playwright, Browser, Page, expect
 from schemas.schemas import BookSearchQuery, BookSearchResult, PlaceHoldRequest, Hold
 from db.models import Hold as HoldModel # Import to get access to the model's structure
@@ -28,7 +29,11 @@ async def _login_to_library(page: Page, library_name: str, card_number: str, pin
     if library_name == "Contra Costa":
         try:
             # Take a screenshot of the login page for debugging
-            await page.screenshot(path="login_page.png")
+            os.makedirs("png_screenshots", exist_ok=True)
+            try:
+                await page.screenshot(path="png_screenshots/login_page.png")
+            except:
+                pass  # Ignore screenshot errors
             
             # Find username field using query_selector (more reliable than wait_for_selector)
             username_selectors = [
@@ -106,7 +111,10 @@ async def _login_to_library(page: Page, library_name: str, card_number: str, pin
             await page.wait_for_timeout(2000)
             
             # Take screenshot after login for debugging
-            await page.screenshot(path="after_login.png")
+            try:
+                await page.screenshot(path="png_screenshots/after_login.png")
+            except:
+                pass  # Ignore screenshot errors
             
             # Check current URL and page content for login success
             current_url = page.url
@@ -181,7 +189,10 @@ async def _login_to_library(page: Page, library_name: str, card_number: str, pin
         except Exception as e:
             print(f"❌ Login error: {e}")
             # Take a screenshot for debugging
-            await page.screenshot(path=f"login_error_{library_name.lower().replace(' ', '_')}.png")
+            try:
+                await page.screenshot(path=f"png_screenshots/login_error_{library_name.lower().replace(' ', '_')}.png")
+            except:
+                pass  # Ignore screenshot errors
             # Raise the exception - we cannot place holds without successful login
             raise Exception(f"Cannot place hold: {e}")
             
@@ -214,7 +225,10 @@ async def _search_and_find_item(page: Page, library_name: str, query: BookSearch
         await page.goto(url, wait_until="networkidle")
         
         # Take a screenshot for debugging
-        await page.screenshot(path="search_page.png")
+        try:
+            await page.screenshot(path="png_screenshots/search_page.png")
+        except:
+            pass  # Ignore screenshot errors
         
         # Get page title and content for debugging
         page_title = await page.title()
@@ -498,7 +512,10 @@ async def _place_hold_on_item(page: Page, library_name: str, item_id: str) -> Di
             await page.wait_for_load_state('networkidle', timeout=15000)
             
             # Take a screenshot for debugging
-            await page.screenshot(path=f"item_page_{item_id}.png")
+            try:
+                await page.screenshot(path=f"png_screenshots/item_page_{item_id}.png")
+            except:
+                pass  # Ignore screenshot errors
             
             page_title = await page.title()
             print(f"DEBUG: Item page loaded - Title: {page_title}")
@@ -599,7 +616,10 @@ async def _place_hold_on_item(page: Page, library_name: str, item_id: str) -> Di
                     
         except Exception as e:
             print(f"❌ Error placing hold: {e}")
-            await page.screenshot(path=f"place_hold_error_{item_id}.png")
+            try:
+                await page.screenshot(path=f"png_screenshots/place_hold_error_{item_id}.png")
+            except:
+                pass  # Ignore screenshot errors
             raise Exception(f"Failed to place hold on item {item_id}: {str(e)}")
     else:
         # Keep simulation for other libraries

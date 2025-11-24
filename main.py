@@ -45,6 +45,18 @@ async def search_book_endpoint(query: schemas.BookSearchQuery):
         raise HTTPException(status_code=404, detail="No books found matching your query.")
     return results
 
+# --- NYT Best Sellers Picture Books Endpoint ---
+
+@app.get("/nyt/picture-books", response_model=List[dict])
+def get_nyt_picture_books():
+    """
+    Fetch the current NYT Best Sellers Picture Books list.
+    """
+    try:
+        return fetch_nyt_picture_books()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch NYT picture books: {e}")
+
 # --- Hold Management Endpoints ---
 
 @app.post("/holds/place", response_model=schemas.Hold)
