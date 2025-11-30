@@ -10,13 +10,31 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String, unique=True, index=True, nullable=False)
-    # In a real application, we would store a hashed password, but for this
-    # example, we'll store library card credentials securely (e.g., encrypted or in a secure vault).
-    # For now, we'll use a simple string field as a placeholder for a unique user identifier.
-    # The actual library credentials will be stored separately or passed at runtime.
-    # For simplicity in this example, we'll assume a user is defined by a username.
+    email = Column(String, unique=True, index=True, nullable=False)
+    hashed_password = Column(String, nullable=False)
+    is_admin = Column(Boolean, default=False, nullable=False)
+    
+    # Library credentials (in production, these should be encrypted)
+    library_card_number = Column(String, nullable=True)
+    library_pin = Column(String, nullable=True)
+    library_name = Column(String, nullable=True, default="Contra Costa")
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
     
     holds = relationship("Hold", back_populates="user")
+
+class Library(Base):
+    __tablename__ = "libraries"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True, nullable=False)
+    base_url = Column(String, nullable=False)
+    search_url = Column(String, nullable=True)
+    login_url = Column(String, nullable=True)
+    description = Column(String, nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class Hold(Base):
     __tablename__ = "holds"

@@ -27,17 +27,39 @@ BOOK_LIST = [
     # "How to Catch a Turkey",
     # "The Leaf Thief",
     # "Creepy Crayon!",
-    "The Smart Cookie",
-    "Time For School, Little Blue Truck",
-    "THE HUMBLE PIE",
-    "HOW TO CATCH A TURKEY",
-    "BLUEY'S NIGHT BEFORE CHRISTMAS",
-    "THE LITTLEST YAK",
-    "BALLOONS OVER BROADWAY",
-    "CHRISTMAS AT HOGWARTS",
+    # "The Smart Cookie",
+    # "Time For School, Little Blue Truck",
+    # "THE HUMBLE PIE",
+    # "HOW TO CATCH A TURKEY",
+    # "BLUEY'S NIGHT BEFORE CHRISTMAS",
+    # "THE LITTLEST YAK",
+    # "BALLOONS OVER BROADWAY",
+    # "CHRISTMAS AT HOGWARTS",
+    # "DON'T LET THE PIGEON DRIVE THE SLEIGH!",
+    # "HOW TO CATCH AN ELF",
+    # "HOW TO CATCH A REINDEER",
+
     "DON'T LET THE PIGEON DRIVE THE SLEIGH!",
-    "HOW TO CATCH AN ELF",
-    "HOW TO CATCH A REINDEER",
+
+"DR. SEUSS'S HOW THE GRINCH LOST CHRISTMAS!",
+
+"HOW TO CATCH AN ELF",
+
+"HOW TO CATCH SANTA CLAUS",
+
+"JUST BECAUSE",
+
+"DRAGONS LOVE TACOS",
+
+"THE BIG CHEESE",
+
+"PETE THE CAT'S 12 GROOVY DAYS OF CHRISTMAS",
+
+"CONSTRUCTION SITE ON CHRISTMAS NIGHT",
+
+"GRUMPY MONKEY OH, NO! CHRISTMAS",
+    
+    
 ]
 
 LIBRARY_NAME = "Contra Costa"

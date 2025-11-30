@@ -1,10 +1,13 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
+from datetime import timedelta
 
 from db.database import get_db, init_db
 from schemas import schemas
-from services import book_service, library_service
+from services import book_service, library_service, auth_service, admin_service
 from services.nyt_picture_books_service import fetch_nyt_picture_books
 
 app = FastAPI(
@@ -13,25 +16,260 @@ app = FastAPI(
     version="0.1.0",
 )
 
+# CORS middleware for React frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://localhost:5173"],  # React dev servers
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Initialize the database and create tables
 init_db()
+
+# Security
+security = HTTPBearer()
+
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security), db: Session = Depends(get_db)):
+    """Dependency to get current authenticated user from JWT token"""
+    token = credentials.credentials
+    payload = auth_service.decode_token(token)
+    if payload is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
+    username: str = payload.get("sub")
+    if username is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials",
+        )
+    user = auth_service.get_user_by_username(db, username=username)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found",
+        )
+    return user
+
+def get_admin_user(current_user = Depends(get_current_user)):
+    """Dependency to verify user is an admin"""
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+    return current_user
 
 @app.get("/")
 def read_root():
     return {"message": "Welcome to the Library Hold Tracker API"}
 
-# --- User Endpoints (for simplicity, just create and get) ---
+# --- Authentication Endpoints ---
+
+@app.post("/auth/register", response_model=schemas.Token, status_code=status.HTTP_201_CREATED)
+def register(user_data: schemas.UserCreate, db: Session = Depends(get_db)):
+    """Register a new user"""
+    # Check if username already exists
+    if auth_service.get_user_by_username(db, user_data.username):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username already registered"
+        )
+    # Check if email already exists
+    if auth_service.get_user_by_email(db, user_data.email):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
+        )
+    
+    # Create user
+    user = auth_service.create_user(db, user_data)
+    
+    # Create access token
+    access_token = auth_service.create_access_token(
+        data={"sub": user.username}
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "is_admin": user.is_admin,
+            "library_name": user.library_name,
+            "has_library_card": bool(user.library_card_number),
+            "created_at": user.created_at
+        }
+    }
+
+@app.post("/auth/login", response_model=schemas.Token)
+def login(login_data: schemas.UserLogin, db: Session = Depends(get_db)):
+    """Login user and return JWT token"""
+    user = auth_service.authenticate_user(db, login_data.username, login_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password"
+        )
+    
+    # Create access token
+    access_token = auth_service.create_access_token(
+        data={"sub": user.username}
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "is_admin": user.is_admin,
+            "library_name": user.library_name,
+            "has_library_card": bool(user.library_card_number),
+            "created_at": user.created_at
+        }
+    }
+
+@app.get("/auth/me", response_model=schemas.UserResponse)
+def get_current_user_info(current_user = Depends(get_current_user)):
+    """Get current user information"""
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "email": current_user.email,
+        "is_admin": current_user.is_admin,
+        "library_name": current_user.library_name,
+        "has_library_card": bool(current_user.library_card_number),
+        "created_at": current_user.created_at
+    }
+
+@app.put("/auth/profile", response_model=schemas.UserResponse)
+def update_profile(
+    profile_data: schemas.UserProfileUpdate,
+    current_user = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Update current user's profile (email, username)"""
+    # Check if new email is already taken by another user
+    if profile_data.email:
+        existing_user = auth_service.get_user_by_email(db, profile_data.email)
+        if existing_user and existing_user.id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered"
+            )
+        current_user.email = profile_data.email
+    
+    # Check if new username is already taken by another user
+    if profile_data.username:
+        existing_user = auth_service.get_user_by_username(db, profile_data.username)
+        if existing_user and existing_user.id != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Username already taken"
+            )
+        current_user.username = profile_data.username
+    
+    db.commit()
+    db.refresh(current_user)
+    
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "email": current_user.email,
+        "is_admin": current_user.is_admin,
+        "library_name": current_user.library_name,
+        "has_library_card": bool(current_user.library_card_number),
+        "created_at": current_user.created_at
+    }
+
+# --- Library Card Management ---
+
+@app.post("/library-cards/update", response_model=schemas.UserResponse)
+def update_library_card(
+    card_data: schemas.LibraryCardUpdate,
+    current_user = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update user's library card credentials.
+    Can provide either library_id (preferred) or library_name.
+    """
+    # Validate library_id if provided
+    if card_data.library_id:
+        library = admin_service.get_library_by_id(db, card_data.library_id)
+        if not library:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Library not found"
+            )
+        if not library.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Library is not active"
+            )
+    
+    user = auth_service.update_library_credentials(
+        db, 
+        current_user.id, 
+        card_data.library_card_number,
+        card_data.library_pin,
+        card_data.library_name or "Contra Costa",
+        card_data.library_id
+    )
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "library_name": user.library_name,
+        "has_library_card": True,
+        "created_at": user.created_at
+    }
+
+@app.get("/library-cards/info")
+def get_library_card_info(
+    current_user = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get user's library card info (without exposing full PIN)"""
+    if not current_user.library_card_number:
+        return {
+            "has_card": False,
+            "library_name": None
+        }
+    
+    return {
+        "has_card": True,
+        "library_name": current_user.library_name,
+        "card_number_masked": f"****{current_user.library_card_number[-4:]}" if current_user.library_card_number else None
+    }
+
+# --- User Endpoints (Legacy - keep for backward compatibility) ---
 
 @app.post("/users/", response_model=schemas.User)
-def create_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    return book_service.create_user(db=db, user=user)
+def create_user_legacy(user: schemas.UserCreate, db: Session = Depends(get_db)):
+    """Legacy endpoint - use /auth/register instead"""
+    return auth_service.create_user(db=db, user_data=user)
 
 @app.get("/users/{user_id}", response_model=schemas.User)
 def read_user(user_id: int, db: Session = Depends(get_db)):
-    db_user = book_service.get_user(db, user_id=user_id)
-    if db_user is None:
+    user = db.query(auth_service.User).filter(auth_service.User.id == user_id).first()
+    if user is None:
         raise HTTPException(status_code=404, detail="User not found")
-    return db_user
+    return user
 
 # --- Book Search Endpoint ---
 
@@ -59,21 +297,53 @@ def get_nyt_picture_books():
 
 # --- Hold Management Endpoints ---
 
+class SimplePlaceHoldRequest(schemas.BaseModel):
+    title: str
+    author: Optional[str] = None
+    isbn: Optional[str] = None
+    library_item_id: str
+    library_name: str = "Contra Costa"
+
 @app.post("/holds/place", response_model=schemas.Hold)
-async def place_hold_endpoint(hold_request: schemas.PlaceHoldRequest, db: Session = Depends(get_db)):
+async def place_hold_endpoint(
+    hold_request: SimplePlaceHoldRequest,
+    current_user = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     """
-    Logs into the specified library, places the hold, and saves the hold record to the database.
+    Place a hold using authenticated user's library credentials
     """
+    # Check if user has library credentials
+    if not current_user.library_card_number or not current_user.library_pin:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Library card credentials not set. Please update your library card information first."
+        )
+    
+    # Build full hold request with user's credentials
+    full_hold_request = schemas.PlaceHoldRequest(
+        user_id=current_user.id,
+        title=hold_request.title,
+        author=hold_request.author,
+        isbn=hold_request.isbn,
+        library_name=hold_request.library_name,
+        library_item_id=hold_request.library_item_id,
+        library_card_number=current_user.library_card_number,
+        library_pin=current_user.library_pin
+    )
+    
     # 1. Attempt to place the hold on the external library website
     try:
-        hold_data = await library_service.place_hold(hold_request)
+        hold_data = await library_service.place_hold(full_hold_request)
     except Exception as e:
-        # In a real app, you'd handle specific login/hold errors
-        raise HTTPException(status_code=500, detail=f"Failed to place hold on library website: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to place hold on library website: {e}"
+        )
 
     # 2. Save the successful hold record to the database
     hold_create = schemas.HoldCreate(
-        user_id=hold_request.user_id,
+        user_id=current_user.id,
         title=hold_data["title"],
         author=hold_data.get("author"),
         isbn=hold_data.get("isbn"),
@@ -90,10 +360,20 @@ async def place_hold_endpoint(hold_request: schemas.PlaceHoldRequest, db: Sessio
     
     return book_service.update_hold_status(db, db_hold.id, status_fields)
 
+@app.get("/holds/my-holds", response_model=List[schemas.Hold])
+def get_my_holds(
+    current_user = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all holds for the authenticated user
+    """
+    return book_service.get_holds_by_user(db, user_id=current_user.id)
+
 @app.get("/holds/{user_id}", response_model=List[schemas.Hold])
 def get_user_holds_endpoint(user_id: int, db: Session = Depends(get_db)):
     """
-    Retrieve all tracked holds for a specific user.
+    Retrieve all tracked holds for a specific user (legacy endpoint).
     """
     return book_service.get_holds_by_user(db, user_id=user_id)
 
@@ -119,4 +399,244 @@ async def update_all_holds_status_endpoint(db: Session = Depends(get_db)):
         updated_count += 1
         
     return {"message": f"Successfully checked and updated status for {updated_count} holds."}
+
+# --- Admin Endpoints ---
+
+@app.get("/admin/users", response_model=List[schemas.AdminUserResponse])
+def admin_get_all_users(
+    skip: int = 0,
+    limit: int = 100,
+    admin_user = Depends(get_admin_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all users (admin only)
+    """
+    users = admin_service.get_all_users(db, skip=skip, limit=limit)
+    return users
+
+@app.get("/admin/users/{user_id}", response_model=schemas.AdminUserResponse)
+def admin_get_user(
+    user_id: int,
+    admin_user = Depends(get_admin_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get user by ID (admin only)
+    """
+    user = admin_service.get_user_by_id(db, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    return user
+
+@app.put("/admin/users/{user_id}", response_model=schemas.AdminUserResponse)
+def admin_update_user(
+    user_id: int,
+    user_update: schemas.AdminUserUpdate,
+    admin_user = Depends(get_admin_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update user information (admin only)
+    """
+    user = admin_service.update_user(db, user_id, user_update)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    return user
+
+@app.delete("/admin/users/{user_id}")
+def admin_delete_user(
+    user_id: int,
+    admin_user = Depends(get_admin_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete user (admin only)
+    """
+    # Prevent admin from deleting themselves
+    if user_id == admin_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot delete your own account"
+        )
+    
+    success = admin_service.delete_user(db, user_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    return {"message": "User deleted successfully"}
+
+@app.post("/admin/users/{user_id}/promote", response_model=schemas.AdminUserResponse)
+def admin_promote_user(
+    user_id: int,
+    admin_user = Depends(get_admin_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Promote user to admin (admin only)
+    """
+    user = admin_service.promote_to_admin(db, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    return user
+
+@app.post("/admin/users/{user_id}/demote", response_model=schemas.AdminUserResponse)
+def admin_demote_user(
+    user_id: int,
+    admin_user = Depends(get_admin_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Remove admin privileges (admin only)
+    """
+    # Prevent admin from demoting themselves
+    if user_id == admin_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot demote yourself"
+        )
+    
+    user = admin_service.demote_from_admin(db, user_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found"
+        )
+    return user
+
+# --- Library Management Endpoints (Admin) ---
+
+@app.get("/admin/libraries", response_model=List[schemas.Library])
+def admin_get_libraries(
+    include_inactive: bool = False,
+    admin_user = Depends(get_admin_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all libraries (admin only)
+    """
+    return admin_service.get_all_libraries(db, include_inactive=include_inactive)
+
+@app.get("/libraries", response_model=List[schemas.Library])
+def get_active_libraries(db: Session = Depends(get_db)):
+    """
+    Get all active libraries (public endpoint)
+    """
+    return admin_service.get_all_libraries(db, include_inactive=False)
+
+@app.get("/admin/libraries/{library_id}", response_model=schemas.Library)
+def admin_get_library(
+    library_id: int,
+    admin_user = Depends(get_admin_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Get library by ID (admin only)
+    """
+    library = admin_service.get_library_by_id(db, library_id)
+    if not library:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Library not found"
+        )
+    return library
+
+@app.post("/admin/libraries", response_model=schemas.Library, status_code=status.HTTP_201_CREATED)
+def admin_create_library(
+    library: schemas.LibraryCreate,
+    admin_user = Depends(get_admin_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Create new library (admin only)
+    """
+    # Check if library with same name already exists
+    existing = admin_service.get_library_by_name(db, library.name)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Library with this name already exists"
+        )
+    
+    return admin_service.create_library(db, library)
+
+@app.put("/admin/libraries/{library_id}", response_model=schemas.Library)
+def admin_update_library(
+    library_id: int,
+    library_update: schemas.LibraryUpdate,
+    admin_user = Depends(get_admin_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update library information (admin only)
+    """
+    library = admin_service.update_library(db, library_id, library_update)
+    if not library:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Library not found"
+        )
+    return library
+
+@app.delete("/admin/libraries/{library_id}")
+def admin_delete_library(
+    library_id: int,
+    admin_user = Depends(get_admin_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete library (admin only)
+    """
+    success = admin_service.delete_library(db, library_id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Library not found"
+        )
+    return {"message": "Library deleted successfully"}
+
+@app.post("/admin/libraries/{library_id}/deactivate", response_model=schemas.Library)
+def admin_deactivate_library(
+    library_id: int,
+    admin_user = Depends(get_admin_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Deactivate library (admin only)
+    """
+    library = admin_service.deactivate_library(db, library_id)
+    if not library:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Library not found"
+        )
+    return library
+
+@app.post("/admin/libraries/{library_id}/activate", response_model=schemas.Library)
+def admin_activate_library(
+    library_id: int,
+    admin_user = Depends(get_admin_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Activate library (admin only)
+    """
+    library = admin_service.activate_library(db, library_id)
+    if not library:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Library not found"
+        )
+    return library
 
